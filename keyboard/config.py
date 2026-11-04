@@ -64,7 +64,7 @@ class Config:
     seed: int = 42
 
     # ---------------- weights hosting (R7: no weights in git) ----------------
-    models_repo: str = ""           # e.g. "your-hf-user/smart-keyboard-models"
+    models_repo: str = "Waxech/smart-keyboard-models"   # Hugging Face model repo with the weights
 
     # ------------------------------------------------------------------
     @property
@@ -99,6 +99,8 @@ class Config:
             known = {f.name for f in fields(cls)}
             for key, value in saved.items():
                 # folder paths stay local: settings may come from another machine
+                if key == "models_repo" and not value:
+                    continue                      # an empty saved value keeps the default
                 if key in known and not key.endswith("_dir"):
                     setattr(cfg, key, value)
         for key, value in overrides.items():

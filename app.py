@@ -2,7 +2,7 @@
 
     python app.py                     # open http://127.0.0.1:7860
     python app.py --share             # public link (e.g. from Google Colab)
-    python app.py --models-repo USER/NAME   # download trained weights first
+    python app.py --models-repo USER/NAME   # weights from another Hugging Face repo
 
 The first column is the model the keyboard runs: the INT8-quantized GPT-2 (R5).
 As you type, each model shows its top-3 next words and how long it took;

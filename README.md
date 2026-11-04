@@ -19,14 +19,15 @@ Needs Python 3.10 or newer.
 ```bash
 python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-python app.py --models-repo USER/smart-keyboard-models    # downloads the trained weights, then opens the app
+python app.py                     # downloads the trained weights (first run only), then opens the app
 ```
 
 Open http://127.0.0.1:7860, type some text, and click a suggestion to insert it. Each column shows one model's
 top-3 next words and how long it took. Add `--share` for a public link (for example from Google Colab).
 
-`USER/smart-keyboard-models` is the Hugging Face model repo that holds the weights (they are not in git).
-Once it is set in `keyboard/config.py` (`models_repo`), plain `python app.py` is enough.
+The weights are not in git. They are in the Hugging Face model repo
+[`Waxech/smart-keyboard-models`](https://huggingface.co/Waxech/smart-keyboard-models) (`models_repo` in
+`keyboard/config.py`); use `--models-repo USER/NAME` for another one.
 
 ## Train everything yourself
 
@@ -48,7 +49,7 @@ python -m keyboard.cli ffnn --ffnn-epochs 10      # artifacts/ffnn/
 python -m keyboard.cli gpt2 --gpt2-epochs 1       # artifacts/gpt2-finetuned/
 python -m keyboard.cli quantize                   # artifacts/gpt2-int8/
 python -m keyboard.cli evaluate                   # results/results.md and results/results.json
-python -m keyboard.cli upload --models-repo USER/smart-keyboard-models   # after `huggingface-cli login`
+python -m keyboard.cli upload                     # weights -> Hugging Face Hub, after `huggingface-cli login`
 ```
 
 ## Architecture
@@ -81,7 +82,7 @@ If the text ends in the middle of a word, only completions of that word are sugg
 | Classical baseline | n-gram LMs, add-one and interpolated Kneser-Ney smoothing, perplexity | B | `keyboard/ngram.py` |
 | Neural network | Feedforward network with an embedding layer, SGD + backpropagation, dropout | A | `keyboard/ffnn.py` |
 | Transformer | GPT-style decoder (masked self-attention) fine-tuned on our corpus; byte-level BPE tokenizer | C | `keyboard/gpt2.py` |
-| Efficient model | Dynamic INT8 quantization | D | `keyboard/quantize.py` |
+| Efficient model | Dynamic INT8 quantization with per-channel weights and SmoothQuant | D | `keyboard/quantize.py` |
 | Benchmark | Size, latency and accuracy of every model on the same test set | D | `keyboard/evaluate.py` |
 
 ## Evaluation
@@ -112,8 +113,15 @@ Run `python -m keyboard.cli evaluate`; the table is written to [`results/results
 - **GPT-2** (`keyboard/gpt2.py`): one epoch of causal-LM fine-tuning, AdamW (lr 5e-5), blocks of 256 tokens,
   mixed precision on the GPU.
 - **Quantization** (`keyboard/quantize.py`): Hugging Face GPT-2 implements its linear layers as `Conv1D`, which
-  PyTorch's dynamic quantizer ignores, so they are converted to equivalent `nn.Linear` layers first; then every
-  linear layer (attention, MLP, LM head) is stored in INT8.
+  PyTorch's dynamic quantizer ignores, so they are converted to equivalent `nn.Linear` layers first. Plain
+  dynamic quantization then failed: it quantizes each layer's input with one scale per tensor, and GPT-2 has a
+  few hidden dimensions with much larger values than the rest (outlier features), so the small values were
+  rounded away (first run: test perplexity per word 40 in FP32, 27,844 in INT8). The quantizer therefore uses
+  per-channel INT8 weights and SmoothQuant (Xiao et al., 2023), which divides each input channel by
+  s = max|X|^a / max|W|^(1-a), folds the division into the LayerNorm (or value projection) before the layer and
+  multiplies the weights by s, so the FP32 model is unchanged but the outliers move into the weights. If the
+  validation perplexity is still more than 2% above FP32, the layers with the largest INT8 error stay in FP32.
+  Every setting it tried, with its validation perplexity, is saved in `artifacts/gpt2-int8/quantization.json`.
 
 ## Tests
 
@@ -132,5 +140,7 @@ no downloads and finish in about a minute.
 - GPT-2 small: A. Radford et al., *Language Models are Unsupervised Multitask Learners*, OpenAI 2019, Hugging Face
   model `gpt2`.
 - Y. Bengio et al., *A Neural Probabilistic Language Model*, JMLR 2003.
+- G. Xiao et al., *SmoothQuant: Accurate and Efficient Post-Training Quantization for Large Language Models*,
+  ICML 2023 ([arXiv:2211.10438](https://arxiv.org/abs/2211.10438)).
 - D. Jurafsky and J. H. Martin, *Speech and Language Processing* (3rd ed. draft), chapters 2 and 3 (BPE, n-gram
   language models, smoothing, perplexity).

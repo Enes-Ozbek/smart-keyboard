@@ -5,6 +5,7 @@ download is needed.  The real runs use WikiText-2 and GPT-2 small.
 """
 from __future__ import annotations
 
+import copy
 import json
 import math
 import random
@@ -137,6 +138,39 @@ def test_conv1d_to_linear_keeps_outputs():
     assert torch.allclose(before, after, atol=1e-5)
 
 
+def test_smoothquant_keeps_fp32_outputs():
+    from transformers import GPT2Config, GPT2LMHeadModel
+
+    from keyboard.quantize import (build_int8, conv1d_to_linear, input_absmax, linear_names,
+                                   smooth)
+
+    torch.manual_seed(0)
+    model = GPT2LMHeadModel(GPT2Config(vocab_size=50, n_positions=16, n_embd=32, n_layer=2,
+                                       n_head=2)).eval()
+    with torch.no_grad():                         # GPT-2-like outlier channels after the LayerNorms
+        for block in model.transformer.h:
+            for ln, conv in ((block.ln_1, block.attn.c_attn), (block.ln_2, block.mlp.c_fc)):
+                ln.weight[[3, 17]] *= 100
+                conv.weight[[3, 17], :] /= 100
+    model = conv1d_to_linear(model)
+    x = torch.randint(0, 50, (4, 12))
+    before = model(x).logits
+    stats = input_absmax(model, x)
+    smoothed = copy.deepcopy(model)
+    smooth(smoothed, stats, 0.5, set(linear_names(smoothed)))
+    assert torch.allclose(before, smoothed(x).logits, atol=1e-4)      # same FP32 function
+    assert torch.equal(smoothed.transformer.wte.weight, model.transformer.wte.weight)
+
+    def error(m):
+        return (m(x).logits - before).abs().mean().item()
+    plain = build_int8(model, None, None, set(), per_channel=False)
+    fixed = build_int8(model, stats, 0.5, set())
+    assert error(fixed) < error(plain) / 2
+    mixed = build_int8(model, stats, 0.5, {"lm_head", "transformer.h.0.mlp.c_proj"})
+    assert type(mixed.lm_head) is torch.nn.Linear                               # kept in FP32
+    assert type(mixed.transformer.h[1].mlp.c_proj) is not torch.nn.Linear   # INT8 module
+
+
 def test_full_pipeline(cfg):
     from keyboard.cli import run_step
     from keyboard.models import LADDER, load_model
@@ -153,6 +187,9 @@ def test_full_pipeline(cfg):
     m = results["models"]
     assert m["ngram-kn"]["perplexity_per_word"] < m["ngram-addone"]["perplexity_per_word"]
     assert m["gpt2-int8"]["size_mb"] < m["gpt2-fp32"]["size_mb"]
+    assert m["gpt2-int8"]["perplexity_per_word"] < 1.1 * m["gpt2-fp32"]["perplexity_per_word"]
+    info = json.loads((cfg.artifacts / "gpt2-int8" / "quantization.json").read_text())
+    assert info["valid_ppl_int8"] <= 1.1 * info["valid_ppl_fp32"]
     assert (cfg.results / "results.md").read_text().startswith("| Model |")
 
     # the key/value cache used during the beam search must not change the result
