@@ -1,0 +1,11 @@
+# data and trained weights are produced by the pipeline and hosted on Hugging Face (R7)
+data/
+artifacts/
+results/eval_positions.json
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+flagged/
+.gradio/

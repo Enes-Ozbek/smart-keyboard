@@ -1,0 +1,10 @@
+# Tested with: torch 2.15.0, transformers 5.22.1, tokenizers 0.23.3, datasets 5.1.0,
+# gradio 6.31.0, huggingface_hub 2.4.0, numpy 2.5.4 (Python 3.13)
+torch>=2.4
+transformers>=4.44
+tokenizers>=0.19
+datasets>=2.20
+gradio>=4.40
+huggingface_hub>=0.24
+numpy>=1.26
+pytest>=8
